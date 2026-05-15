@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <title>Inventaris Perusahaan - ISR</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Additional styles for SPA functionality */
+        .page-container {
+            display: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+        .page-container.active-page {
+            display: block;
+            opacity: 1;
+        }
+        .signature-preview {
+            max-width: 100%;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: #f8f9fa;
+            min-height: 80px;
+        }
+        .filter-buttons .btn-filter {
+            transition: all 0.2s;
+        }
+        .filter-buttons .btn-filter.active {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+        .table-responsive-custom {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        .clickable-row {
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .clickable-row:hover {
+            background: rgba(251, 82, 1, 0.05);
+        }
+        .detail-modal .modal-dialog {
+            margin: 0.5rem;
+        }
+        @media (min-width: 576px) {
+            .detail-modal .modal-dialog {
+                max-width: 500px;
+                margin: 1.75rem auto;
+            }
+        }
+        .search-box {
+            position: relative;
+        }
+        .search-box i {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        .search-box input {
+            padding-left: 36px;
+        }
+        .signature-container {
+            background: white;
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+        }
+        .btn-group-sm-custom {
+            display: flex;
+            gap: 8px;
+        }
+        .history-timeline {
+            position: relative;
+            padding-left: 20px;
+        }
+        .history-timeline::before {
+            content: '';
+            position: absolute;
+            left: 6px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: var(--border);
+        }
+        .history-item {
+            position: relative;
+            margin-bottom: 16px;
+        }
+        .history-item::before {
+            content: '';
+            position: absolute;
+            left: -20px;
+            top: 8px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 2px solid white;
+            box-shadow: 0 0 0 2px var(--border);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        @media (min-width: 480px) {
+            .stats-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+        .quick-actions-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        .header-logo-img {
+            width: 36px;
+            height: 36px;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay" style="display: flex;">
+    <div class="logo-overlay">
+        <img src="isr.png" alt="ISR Logo">
+    </div>
+    <div class="spinner-border spinner" role="status"></div>
+    <p>Memuat Sistem Inventaris...</p>
+</div>
+
+<!-- Header -->
+<header class="app-header" id="appHeader">
+    <button class="btn-back" id="btnBack" style="display: none;">
+        <i class="bi bi-arrow-left"></i>
+    </button>
+    <img src="isr.png" alt="ISR Logo" class="header-logo-img">
+    <span class="header-title" id="headerTitle">Dashboard</span>
+    <div style="width: 36px;"></div>
+</header>
+
+<!-- Main Content Container -->
+<main class="main-content" id="mainContent">
+    <!-- Pages will be injected here -->
+    <div id="pageContainer"></div>
+</main>
+
+<!-- Bottom Navigation -->
+<nav class="bottom-nav" id="bottomNav">
+    <div class="nav-item active" data-page="dashboard">
+        <i class="bi bi-graph-up"></i>
+        <span>Dashboard</span>
+    </div>
+    <div class="nav-item" data-page="items">
+        <i class="bi bi-box-seam"></i>
+        <span>Item</span>
+    </div>
+    <div class="nav-item" data-page="stockOpname">
+        <i class="bi bi-clipboard-check"></i>
+        <span>Opname</span>
+    </div>
+    <div class="nav-item" data-page="distribution">
+        <i class="bi bi-gift"></i>
+        <span>Distribusi</span>
+    </div>
+    <div class="nav-item" data-page="history">
+        <i class="bi bi-clock-history"></i>
+        <span>Histori</span>
+    </div>
+</nav>
+
+<!-- FAB for quick actions -->
+<button class="fab-main" id="fabMain">
+    <i class="bi bi-plus-lg"></i>
+</button>
+
+<!-- Toast Container -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 9998;">
+    <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="3000">
+        <div class="d-flex">
+            <div class="toast-body"></div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Container -->
+<div id="modalContainer"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
