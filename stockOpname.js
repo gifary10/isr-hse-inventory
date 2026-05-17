@@ -1,7 +1,7 @@
 import { apiService } from './services.js';
 import { $, renderContent, showToast, formatNumber } from './dom.js';
 import { CONFIG } from './config.js';
-import { getStockStatus } from './helpers.js';
+import { getStockStatus, escapeHtml } from './helpers.js';
 
 let currentItems = [];
 let currentCategory = 1;
@@ -220,11 +220,4 @@ function attachOpnameEvents() {
             loadItems();
         });
     }
-}
-
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
 }

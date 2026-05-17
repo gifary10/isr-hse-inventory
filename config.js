@@ -1,6 +1,6 @@
 // Google Sheets Configuration
 export const CONFIG = {
-    SPREADSHEET_ID: '1wffykcbrb8oGyGJWX0ZeGZ_Vt4yttgHjvlfzvd-Tg74',
+    SPREADSHEET_ID: '1m7FF85UULA0nb-9m6q5QB2z_UYkwSzBhpNSUtkR9kdQ',
     SHEET_NAMES: {
         ITEMS: 'Items',
         STOCK_OPNAME: 'StockOpname',
@@ -18,4 +18,4 @@ export const CONFIG = {
 };
 
 // GANTI DENGAN URL WEB APP ANDA SETELAH DEPLOY
-export const API_URL = 'https://script.google.com/macros/s/AKfycbysf43sxMLYbAyVg3CShufdTVx8lb0oBZJnGNutAjD3n1EWGeo9Q65l7uTOLJELzLr_Kg/exec';
+export const API_URL = 'https://script.google.com/macros/s/AKfycbxGEDNmdkR3rKyLHlBfX4m3QsIe9MWqr9x2Qr2Ttj3ihb8Cdg32rzqAJR3l_WzIwx6A/exec';

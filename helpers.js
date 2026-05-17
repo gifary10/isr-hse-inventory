@@ -58,6 +58,23 @@ export function validateForm(data, rules) {
     return true;
 }
 
-export function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
+/**
+ * Generate unique ID dengan prefix opsional
+ * @param {string} prefix - Awalan ID (default: 'id')
+ * @returns {string}
+ */
+export function generateId(prefix = 'id') {
+    return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
+}
+
+/**
+ * Escape HTML untuk mencegah XSS
+ * @param {string} text 
+ * @returns {string}
+ */
+export function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }

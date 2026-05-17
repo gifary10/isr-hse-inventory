@@ -1,5 +1,6 @@
 import { apiService } from './services.js';
 import { $, renderContent, formatDate, formatNumber, showToast } from './dom.js';
+import { escapeHtml } from './helpers.js';
 
 let activeTab = 'distribution';
 
@@ -52,6 +53,28 @@ async function loadHistory() {
     }
 }
 
+function renderSignatureCell(signature) {
+    if (!signature) {
+        return `<small class="text-muted">-</small>`;
+    }
+
+    if (signature.startsWith('http://') || signature.startsWith('https://')) {
+        return `
+            <a href="${escapeHtml(signature)}" target="_blank" rel="noopener noreferrer"
+               class="btn btn-sm btn-outline-primary py-0 px-2"
+               title="Lihat tanda tangan">
+                <i class="bi bi-pen"></i> Lihat TTD
+            </a>
+        `;
+    }
+
+    if (signature.startsWith('data:image/')) {
+        return `<img src="${signature}" alt="Tanda Tangan" style="max-height:40px; max-width:100px; border:1px solid #dee2e6; border-radius:4px;">`;
+    }
+
+    return `<small class="text-muted">-</small>`;
+}
+
 function renderHistoryList(data, title) {
     const container = $('#historyList');
     if (!container) return;
@@ -93,9 +116,14 @@ function renderHistoryList(data, title) {
                             </div>
                         </div>
                         <hr class="my-2">
-                        <small class="text-muted">
-                            <i class="bi bi-person"></i> Didistribusikan oleh: ${escapeHtml(record.distributor || 'Admin')}
-                        </small>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <small class="text-muted">
+                                <i class="bi bi-person"></i> ${escapeHtml(record.distributor || 'Admin')}
+                            </small>
+                            <div>
+                                ${renderSignatureCell(record.signature)}
+                            </div>
+                        </div>
                     </div>
                 `;
             } else {
@@ -154,6 +182,11 @@ function attachHistoryEvents() {
             let data;
             if (activeTab === 'distribution') {
                 data = await apiService.getDistributionHistory();
+                // Hapus kolom signature agar tidak mengganggu Excel (opsional)
+                data = data.map(d => {
+                    const { signature, ...rest } = d;
+                    return rest;
+                });
             } else {
                 data = await apiService.getStockHistory();
             }
@@ -166,11 +199,4 @@ function attachHistoryEvents() {
             showToast('History berhasil diexport!', 'success');
         });
     }
-}
-
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
 }

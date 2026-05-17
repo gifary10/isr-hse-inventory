@@ -1,6 +1,7 @@
 import { apiService } from './services.js';
 import { $, renderContent, showToast, formatNumber, formatDate } from './dom.js';
 import { CONFIG } from './config.js';
+import { escapeHtml, generateId } from './helpers.js';
 
 let currentItems = [];
 let currentCategory = 'all';
@@ -248,7 +249,7 @@ function openItemModal(item = null) {
         const category = CONFIG.CATEGORIES.find(c => c.id === categoryId);
         
         const itemData = {
-            id: isEdit ? item.id : generateId(),
+            id: isEdit ? item.id : generateId('item'),
             name: name,
             category_id: categoryId,
             category: category.name,
@@ -310,17 +311,6 @@ async function confirmDeleteItem(itemId) {
             await loadItems();
         }
     };
-}
-
-function generateId() {
-    return 'item_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
-}
-
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
 }
 
 function attachItemsEvents() {

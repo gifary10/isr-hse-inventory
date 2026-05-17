@@ -1,10 +1,14 @@
 // ISR Inventory - Google Apps Script Backend
 // Deploy this as a Web App
 
-const SPREADSHEET_ID = '1wffykcbrb8oGyGJWX0ZeGZ_Vt4yttgHjvlfzvd-Tg74';
+const SPREADSHEET_ID = '1m7FF85UULA0nb-9m6q5QB2z_UYkwSzBhpNSUtkR9kdQ';
+const SIGNATURE_FOLDER_ID = '1Q-yXI6FrD0mGumL-cK9ZBy8jvHxTY6od';
 
-// ✅ CORS FIX: Hanya perlu doGet karena semua request sekarang dikirim via GET.
-// doPost tetap ada sebagai fallback tapi tidak lagi dipanggil dari frontend.
+// ----------------------------------------------------------------
+// doGet  → semua request JSONP biasa (getItems, saveDistribution, dll)
+// doPost → khusus uploadSignature (payload besar, tidak bisa via URL)
+// ----------------------------------------------------------------
+
 function doGet(e) {
   return handleRequest(e);
 }
@@ -14,31 +18,38 @@ function doPost(e) {
 }
 
 function handleRequest(e) {
-  // ✅ JSONP: jika ada parameter callback, kembalikan sebagai JavaScript bukan JSON murni.
-  // Browser menyisipkan <script src="...?callback=fn"> — tidak ada CORS check.
-  const callback = e.parameter?.callback;
+  const callback = e.parameter && e.parameter.callback;
 
-  let result;
-  const action = e.parameter?.action;
-
-  // ✅ Baca payload dari query parameter (dikirim oleh services.js sebagai JSON string)
+  let action = (e.parameter && e.parameter.action) || '';
   let payload = {};
-  if (e.parameter?.payload) {
-    try {
-      payload = JSON.parse(e.parameter.payload);
-    } catch (err) {
-      payload = e.parameter;
+
+  // Baca payload dari query string (GET / JSONP)
+  if (e.parameter && e.parameter.payload) {
+    try { payload = JSON.parse(e.parameter.payload); } catch(err) {}
+  }
+
+  // Baca payload dari POST body (FormData atau JSON)
+  if (e.postData && e.postData.contents) {
+    // FormData dikirim sebagai application/x-www-form-urlencoded oleh fetch FormData
+    if (e.postData.type === 'application/x-www-form-urlencoded' ||
+        e.postData.type === 'multipart/form-data') {
+      // parameter sudah ter-parse otomatis oleh Apps Script ke e.parameter
+      if (e.parameter && e.parameter.action) action = e.parameter.action;
+      if (e.parameter && e.parameter.payload) {
+        try { payload = JSON.parse(e.parameter.payload); } catch(err) {}
+      }
+    } else {
+      // JSON body
+      try {
+        const body = JSON.parse(e.postData.contents);
+        if (body.action) action = body.action;
+        if (body.payload) payload = typeof body.payload === 'string'
+          ? JSON.parse(body.payload) : body.payload;
+      } catch(err) {}
     }
   }
 
-  // Fallback: jika masih ada POST request lama dengan body JSON
-  if (e.postData && e.postData.contents) {
-    try {
-      const postPayload = JSON.parse(e.postData.contents);
-      payload = Object.assign(postPayload, payload);
-    } catch (err) {}
-  }
-
+  let result;
   try {
     switch (action) {
       case 'getItems':
@@ -57,7 +68,7 @@ function handleRequest(e) {
         result = { success: true, data: getDistributionHistory() };
         break;
       case 'searchEmployees':
-        result = { success: true, data: searchEmployees(payload.query || e.parameter?.query || '') };
+        result = { success: true, data: searchEmployees(payload.query || (e.parameter && e.parameter.query) || '') };
         break;
       case 'getDashboardStats':
         result = { success: true, data: getDashboardStats() };
@@ -71,28 +82,101 @@ function handleRequest(e) {
       case 'deleteItem':
         result = deleteItem(payload.id);
         break;
+      case 'uploadSignature':
+        result = uploadSignature(payload);
+        break;
+      case 'updateDistributionSignature':
+        result = updateDistributionSignature(payload);
+        break;
       default:
         result = { success: false, error: 'Invalid action: ' + action };
     }
   } catch (error) {
+    Logger.log('handleRequest ERROR: ' + error.toString());
     result = { success: false, error: error.toString() };
   }
 
-  // Jika ada callback parameter → JSONP response (text/javascript)
-  // Jika tidak ada → JSON biasa (untuk testing langsung di browser)
+  const json = JSON.stringify(result);
+
+  // JSONP (GET dengan callback)
   if (callback) {
-    const jsonpOutput = ContentService.createTextOutput(
-      `${callback}(${JSON.stringify(result)})`
-    );
-    jsonpOutput.setMimeType(ContentService.MimeType.JAVASCRIPT);
-    return jsonpOutput;
+    const out = ContentService.createTextOutput(callback + '(' + json + ')');
+    out.setMimeType(ContentService.MimeType.JAVASCRIPT);
+    return out;
   }
 
-  const jsonOutput = ContentService.createTextOutput(JSON.stringify(result));
-  jsonOutput.setMimeType(ContentService.MimeType.JSON);
-  return jsonOutput;
+  // JSON biasa (POST atau GET tanpa callback)
+  const out = ContentService.createTextOutput(json);
+  out.setMimeType(ContentService.MimeType.JSON);
+  return out;
 }
 
+// ============================================================
+// Update signature URL pada baris distribusi yang sudah ada
+// ============================================================
+function updateDistributionSignature(data) {
+  try {
+    if (!data.id || !data.signature) {
+      return { success: false, error: 'id dan signature wajib diisi' };
+    }
+
+    const sheet = getSheet('Distribution');
+    if (sheet.getLastRow() <= 1) return { success: false, error: 'Data distribusi kosong' };
+
+    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 14).getValues();
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i][0]) === String(data.id)) {
+        // Kolom ke-10 (index 9) = signature
+        sheet.getRange(i + 2, 10).setValue(data.signature);
+        Logger.log('Signature updated for distribution: ' + data.id);
+        return { success: true };
+      }
+    }
+
+    return { success: false, error: 'ID distribusi tidak ditemukan: ' + data.id };
+  } catch (err) {
+    Logger.log('updateDistributionSignature ERROR: ' + err.toString());
+    return { success: false, error: err.toString() };
+  }
+}
+
+// ============================================================
+// Upload tanda tangan ke Google Drive (tanpa setSharing)
+// ============================================================
+function uploadSignature(payload) {
+  try {
+    const imageBase64 = payload.imageBase64;
+    const fileName    = payload.fileName;
+
+    if (!imageBase64 || !fileName) {
+      return { success: false, error: 'imageBase64 dan fileName wajib diisi' };
+    }
+
+    Logger.log('uploadSignature: ' + fileName + ' (' + Math.round(imageBase64.length * 0.75 / 1024) + ' KB)');
+
+    const decoded = Utilities.base64Decode(imageBase64);
+    const blob    = Utilities.newBlob(decoded, 'image/png', fileName);
+    const folder  = DriveApp.getFolderById(SIGNATURE_FOLDER_ID);
+    const file    = folder.createFile(blob);
+
+    // Baris setSharing dihapus karena folder sudah publik (Anyone with link can view)
+    // file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    const fileId  = file.getId();
+    const viewUrl = 'https://drive.google.com/file/d/' + fileId + '/view';
+
+    Logger.log('uploadSignature OK: ' + fileId);
+    return { success: true, url: viewUrl, fileId: fileId };
+
+  } catch (err) {
+    Logger.log('uploadSignature ERROR: ' + err.toString());
+    return { success: false, error: 'Upload gagal: ' + err.toString() };
+  }
+}
+
+// ============================================================
+// Sheet helpers
+// ============================================================
 function getSheet(sheetName) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   let sheet = ss.getSheetByName(sheetName);
@@ -113,76 +197,50 @@ function getSheet(sheetName) {
 
 function getItems() {
   const sheet = getSheet('Items');
-  if (sheet.getLastRow() <= 1) {
-    initializeItems();
-  }
+  if (sheet.getLastRow() <= 1) initializeItems();
   const data = sheet.getRange(2,1,sheet.getLastRow()-1,8).getValues();
-  return data.map(row => ({
-    id: row[0],
-    name: row[1],
-    category_id: row[2],
-    category: row[3],
-    current_stock: row[4],
-    unit: row[5],
-    min_stock: row[6],
-    last_updated: row[7]
-  }));
+  return data.map(function(row) {
+    return { id:row[0], name:row[1], category_id:row[2], category:row[3],
+             current_stock:row[4], unit:row[5], min_stock:row[6], last_updated:row[7] };
+  });
 }
 
 function initializeItems() {
   const sheet = getSheet('Items');
-  const items = [];
   const itemNames = {
-    1: ['Paracetamol', 'Amoxicillin', 'Ibuprofen', 'Cetirizine', 'Omeprazole'],
-    2: ['Vitamin C', 'Vitamin D3', 'Vitamin B Complex', 'Multivitamin', 'Vitamin E'],
-    3: ['Plaster', 'Betadine', 'Kassa Steril', 'Minyak Kayu Putih', 'Antiseptik'],
-    4: ['Masker Medis', 'Sarung Tangan', 'Face Shield', 'Hand Sanitizer', 'Apron']
+    1: ['Paracetamol','Amoxicillin','Ibuprofen','Cetirizine','Omeprazole'],
+    2: ['Vitamin C','Vitamin D3','Vitamin B Complex','Multivitamin','Vitamin E'],
+    3: ['Plaster','Betadine','Kassa Steril','Minyak Kayu Putih','Antiseptik'],
+    4: ['Masker Medis','Sarung Tangan','Face Shield','Hand Sanitizer','Apron']
   };
-  const categories = ['Obat', 'Vitamin', 'Isi P3K', 'APD'];
-
-  for (let catId = 1; catId <= 4; catId++) {
-    const names = itemNames[catId];
-    names.forEach((name, idx) => {
-      items.push([
-        `${catId}-${idx + 1}`,
-        name,
-        catId,
-        categories[catId-1],
-        Math.floor(Math.random() * 500) + 50,
-        catId === 4 ? 'pcs' : 'tablet',
-        50,
-        new Date().toISOString()
-      ]);
+  const categories = ['Obat','Vitamin','Isi P3K','APD'];
+  const items = [];
+  for (var catId = 1; catId <= 4; catId++) {
+    itemNames[catId].forEach(function(name, idx) {
+      items.push([catId+'-'+(idx+1), name, catId, categories[catId-1],
+                  Math.floor(Math.random()*500)+50,
+                  catId===4?'pcs':'tablet', 50, new Date().toISOString()]);
     });
   }
-
-  if (sheet.getLastRow() > 1) {
-    sheet.getRange(2,1,sheet.getLastRow()-1,8).clear();
-  }
+  if (sheet.getLastRow() > 1) sheet.getRange(2,1,sheet.getLastRow()-1,8).clear();
   sheet.getRange(2,1,items.length,8).setValues(items);
 }
 
 function addItem(itemData) {
   const sheet = getSheet('Items');
-  const newRow = [
-    itemData.id || Date.now().toString(),
-    itemData.name,
-    itemData.category_id,
-    itemData.category,
-    itemData.current_stock || 0,
-    itemData.unit || 'pcs',
-    itemData.min_stock || 50,
-    new Date().toISOString()
-  ];
+  const newRow = [itemData.id||Date.now().toString(), itemData.name,
+                  itemData.category_id, itemData.category,
+                  itemData.current_stock||0, itemData.unit||'pcs',
+                  itemData.min_stock||50, new Date().toISOString()];
   sheet.appendRow(newRow);
-  return { success: true, id: newRow[0] };
+  return { success:true, id:newRow[0] };
 }
 
 function updateItem(itemData) {
   const sheet = getSheet('Items');
   const data = sheet.getRange(2,1,sheet.getLastRow()-1,8).getValues();
-  for (let i = 0; i < data.length; i++) {
-    if (data[i][0] === itemData.id) {
+  for (var i=0; i<data.length; i++) {
+    if (String(data[i][0]) === String(itemData.id)) {
       sheet.getRange(i+2,2).setValue(itemData.name);
       sheet.getRange(i+2,3).setValue(itemData.category_id);
       sheet.getRange(i+2,4).setValue(itemData.category);
@@ -190,47 +248,39 @@ function updateItem(itemData) {
       sheet.getRange(i+2,6).setValue(itemData.unit);
       sheet.getRange(i+2,7).setValue(itemData.min_stock);
       sheet.getRange(i+2,8).setValue(new Date().toISOString());
-      return { success: true };
+      return { success:true };
     }
   }
-  return { success: false, error: 'Item not found' };
+  return { success:false, error:'Item not found' };
 }
 
 function deleteItem(itemId) {
   const sheet = getSheet('Items');
   const data = sheet.getRange(2,1,sheet.getLastRow()-1,8).getValues();
-  for (let i = 0; i < data.length; i++) {
-    if (data[i][0] === itemId) {
+  for (var i=0; i<data.length; i++) {
+    if (String(data[i][0]) === String(itemId)) {
       sheet.deleteRow(i+2);
-      return { success: true };
+      return { success:true };
     }
   }
-  return { success: false, error: 'Item not found' };
+  return { success:false, error:'Item not found' };
 }
 
 function saveStockOpname(data) {
   const sheet = getSheet('StockOpname');
-  const newRow = [
-    Date.now().toString(),
-    data.item_id,
-    data.item_name,
-    data.category,
-    data.old_stock,
-    data.new_stock,
-    data.notes || '',
-    data.adjusted_by || 'System',
-    new Date().toISOString()
-  ];
+  const newRow = [Date.now().toString(), data.item_id, data.item_name,
+                  data.category, data.old_stock, data.new_stock,
+                  data.notes||'', data.adjusted_by||'System', new Date().toISOString()];
   sheet.appendRow(newRow);
   updateItemStock(data.item_id, data.new_stock);
-  return { success: true, id: newRow[0] };
+  return { success:true, id:newRow[0] };
 }
 
 function updateItemStock(itemId, newStock) {
   const sheet = getSheet('Items');
   const data = sheet.getRange(2,1,sheet.getLastRow()-1,8).getValues();
-  for (let i = 0; i < data.length; i++) {
-    if (data[i][0] === itemId) {
+  for (var i=0; i<data.length; i++) {
+    if (String(data[i][0]) === String(itemId)) {
       sheet.getRange(i+2,5).setValue(newStock);
       sheet.getRange(i+2,8).setValue(new Date().toISOString());
       break;
@@ -239,99 +289,96 @@ function updateItemStock(itemId, newStock) {
 }
 
 function saveDistribution(data) {
-  const sheet = getSheet('Distribution');
-  const newRow = [
-    Date.now().toString(),
-    data.employee_id,
-    data.employee_name,
-    data.department,
-    data.position,
-    data.item_id,
-    data.item_name,
-    data.category,
-    data.quantity,
-    data.signature || '',
-    data.distributor || 'System',
-    data.notes || '',
-    new Date().toISOString(),
-    'completed'
-  ];
-  sheet.appendRow(newRow);
+  try {
+    const sheet = getSheet('Distribution');
 
-  const itemSheet = getSheet('Items');
-  const itemData = itemSheet.getRange(2,1,itemSheet.getLastRow()-1,8).getValues();
-  for (let i = 0; i < itemData.length; i++) {
-    if (itemData[i][0] === data.item_id) {
-      const newStock = itemData[i][4] - data.quantity;
-      itemSheet.getRange(i+2,5).setValue(newStock);
-      itemSheet.getRange(i+2,8).setValue(new Date().toISOString());
-      break;
+    // Bangun URL dari fileId jika ada (lebih pendek dari full URL)
+    var signatureUrl = data.signature || '';
+    if (data.signature_file_id) {
+      signatureUrl = 'https://drive.google.com/file/d/' + data.signature_file_id + '/view';
     }
-  }
 
-  return { success: true, id: newRow[0] };
+    var newRow = [
+      Date.now().toString(),
+      data.employee_id,
+      data.employee_name,
+      data.department,
+      data.position,
+      data.item_id,
+      data.item_name,
+      data.category,
+      data.quantity,
+      signatureUrl,
+      data.distributor || 'System',
+      data.notes || '',
+      new Date().toISOString(),
+      'completed'
+    ];
+
+    sheet.appendRow(newRow);
+    Logger.log('Distribution saved: ' + newRow[0]);
+
+    // Kurangi stok
+    var itemSheet = getSheet('Items');
+    var lastRow = itemSheet.getLastRow();
+    if (lastRow > 1) {
+      var itemData = itemSheet.getRange(2, 1, lastRow - 1, 8).getValues();
+      for (var i = 0; i < itemData.length; i++) {
+        if (String(itemData[i][0]) === String(data.item_id)) {
+          var newStock = Number(itemData[i][4]) - Number(data.quantity);
+          itemSheet.getRange(i+2, 5).setValue(newStock);
+          itemSheet.getRange(i+2, 8).setValue(new Date().toISOString());
+          Logger.log('Stock updated: ' + data.item_id + ' -> ' + newStock);
+          break;
+        }
+      }
+    }
+
+    return { success:true, id:newRow[0] };
+
+  } catch(err) {
+    Logger.log('saveDistribution ERROR: ' + err.toString());
+    return { success:false, error:err.toString() };
+  }
 }
 
 function getStockHistory() {
   const sheet = getSheet('StockOpname');
   if (sheet.getLastRow() <= 1) return [];
   const data = sheet.getRange(2,1,sheet.getLastRow()-1,9).getValues();
-  return data.map(row => ({
-    id: row[0],
-    item_id: row[1],
-    item_name: row[2],
-    category: row[3],
-    old_stock: row[4],
-    new_stock: row[5],
-    notes: row[6],
-    adjusted_by: row[7],
-    timestamp: row[8]
-  })).reverse();
+  return data.map(function(row) {
+    return { id:row[0], item_id:row[1], item_name:row[2], category:row[3],
+             old_stock:row[4], new_stock:row[5], notes:row[6],
+             adjusted_by:row[7], timestamp:row[8] };
+  }).reverse();
 }
 
 function getDistributionHistory() {
   const sheet = getSheet('Distribution');
   if (sheet.getLastRow() <= 1) return [];
   const data = sheet.getRange(2,1,sheet.getLastRow()-1,14).getValues();
-  return data.map(row => ({
-    id: row[0],
-    employee_id: row[1],
-    employee_name: row[2],
-    department: row[3],
-    position: row[4],
-    item_id: row[5],
-    item_name: row[6],
-    category: row[7],
-    quantity: row[8],
-    signature: row[9],
-    distributor: row[10],
-    notes: row[11],
-    timestamp: row[12],
-    status: row[13]
-  })).reverse();
+  return data.map(function(row) {
+    return { id:row[0], employee_id:row[1], employee_name:row[2],
+             department:row[3], position:row[4], item_id:row[5],
+             item_name:row[6], category:row[7], quantity:row[8],
+             signature:row[9], distributor:row[10], notes:row[11],
+             timestamp:row[12], status:row[13] };
+  }).reverse();
 }
 
 function searchEmployees(query) {
   const sheet = getSheet('Employees');
-  if (sheet.getLastRow() <= 1) {
-    initializeEmployees();
-  }
+  if (sheet.getLastRow() <= 1) initializeEmployees();
   const data = sheet.getRange(2,1,sheet.getLastRow()-1,5).getValues();
-  const employees = data.filter(row => row[4] === 'active').map(row => ({
-    id: row[0],
-    name: row[1],
-    department: row[2],
-    position: row[3],
-    status: row[4]
-  }));
-
+  const employees = data.filter(function(row) { return row[4]==='active'; })
+    .map(function(row) {
+      return { id:row[0], name:row[1], department:row[2], position:row[3], status:row[4] };
+    });
   if (!query) return employees;
-
-  const lowerQuery = query.toLowerCase();
-  return employees.filter(e =>
-    e.name.toLowerCase().includes(lowerQuery) ||
-    e.id.toLowerCase().includes(lowerQuery)
-  );
+  const q = query.toLowerCase();
+  return employees.filter(function(e) {
+    return e.name.toLowerCase().includes(q) || e.id.toLowerCase().includes(q);
+  });
 }
 
 function initializeEmployees() {
@@ -354,36 +401,29 @@ function initializeEmployees() {
 function getDashboardStats() {
   const items = getItems();
   const distribution = getDistributionHistory();
-
   const categories = [
-    { id: 1, name: 'Obat', count: 0, low_stock: 0 },
-    { id: 2, name: 'Vitamin', count: 0, low_stock: 0 },
-    { id: 3, name: 'Isi P3K', count: 0, low_stock: 0 },
-    { id: 4, name: 'APD', count: 0, low_stock: 0 }
+    { id:1, name:'Obat',    count:0, low_stock:0 },
+    { id:2, name:'Vitamin', count:0, low_stock:0 },
+    { id:3, name:'Isi P3K', count:0, low_stock:0 },
+    { id:4, name:'APD',     count:0, low_stock:0 }
   ];
-
-  let totalStock = 0;
-  let lowStockCount = 0;
-
-  items.forEach(item => {
+  var totalStock = 0, lowStockCount = 0;
+  items.forEach(function(item) {
     totalStock += item.current_stock;
-    const cat = categories.find(c => c.id === item.category_id);
+    var cat = categories.find(function(c) { return c.id===item.category_id; });
     if (cat) {
       cat.count++;
-      if (item.current_stock < item.min_stock) {
-        cat.low_stock++;
-        lowStockCount++;
-      }
+      if (item.current_stock < item.min_stock) { cat.low_stock++; lowStockCount++; }
     }
   });
+  const totalDistributed = distribution.reduce(function(s,d) { return s+d.quantity; }, 0);
+  return { total_items:items.length, low_stock:lowStockCount,
+           total_stock:totalStock, total_distributed:totalDistributed,
+           categories:categories };
+}
 
-  const totalDistributed = distribution.reduce((sum, d) => sum + d.quantity, 0);
-
-  return {
-    total_items: items.length,
-    low_stock: lowStockCount,
-    total_stock: totalStock,
-    total_distributed: totalDistributed,
-    categories: categories
-  };
+// Jalankan fungsi ini SEKALI dari editor untuk memberikan izin DriveApp
+function authorizeApp() {
+  const folder = DriveApp.getFolderById(SIGNATURE_FOLDER_ID);
+  Logger.log('Folder: ' + folder.getName());
 }
