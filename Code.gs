@@ -1,14 +1,20 @@
-// ISR Inventory - Google Apps Script Backend
+// ISR Inventory - Google Apps Script Backend with CacheService
 // Deploy this as a Web App
 
 const SPREADSHEET_ID = '1m7FF85UULA0nb-9m6q5QB2z_UYkwSzBhpNSUtkR9kdQ';
 const SIGNATURE_FOLDER_ID = '1Q-yXI6FrD0mGumL-cK9ZBy8jvHxTY6od';
 
-// ----------------------------------------------------------------
-// doGet  → semua request JSONP biasa (getItems, saveDistribution, dll)
-// doPost → khusus uploadSignature (payload besar, tidak bisa via URL)
-// ----------------------------------------------------------------
+// Konfigurasi cache TTL (detik)
+const CACHE_TTL = {
+  ITEMS: 300,           // 5 menit
+  DASHBOARD: 300,       // 5 menit
+  HISTORY: 120,         // 2 menit
+  EMPLOYEES: 600        // 10 menit
+};
 
+// ----------------------------------------------------------------
+// doGet & doPost
+// ----------------------------------------------------------------
 function doGet(e) {
   return handleRequest(e);
 }
@@ -28,18 +34,15 @@ function handleRequest(e) {
     try { payload = JSON.parse(e.parameter.payload); } catch(err) {}
   }
 
-  // Baca payload dari POST body (FormData atau JSON)
+  // Baca payload dari POST body
   if (e.postData && e.postData.contents) {
-    // FormData dikirim sebagai application/x-www-form-urlencoded oleh fetch FormData
     if (e.postData.type === 'application/x-www-form-urlencoded' ||
         e.postData.type === 'multipart/form-data') {
-      // parameter sudah ter-parse otomatis oleh Apps Script ke e.parameter
       if (e.parameter && e.parameter.action) action = e.parameter.action;
       if (e.parameter && e.parameter.payload) {
         try { payload = JSON.parse(e.parameter.payload); } catch(err) {}
       }
     } else {
-      // JSON body
       try {
         const body = JSON.parse(e.postData.contents);
         if (body.action) action = body.action;
@@ -53,7 +56,7 @@ function handleRequest(e) {
   try {
     switch (action) {
       case 'getItems':
-        result = { success: true, data: getItems() };
+        result = { success: true, data: getItemsCached() };
         break;
       case 'saveStockOpname':
         result = saveStockOpname(payload);
@@ -62,16 +65,16 @@ function handleRequest(e) {
         result = saveDistribution(payload);
         break;
       case 'getStockHistory':
-        result = { success: true, data: getStockHistory() };
+        result = { success: true, data: getStockHistoryCached() };
         break;
       case 'getDistributionHistory':
-        result = { success: true, data: getDistributionHistory() };
+        result = { success: true, data: getDistributionHistoryCached() };
         break;
       case 'searchEmployees':
-        result = { success: true, data: searchEmployees(payload.query || (e.parameter && e.parameter.query) || '') };
+        result = { success: true, data: searchEmployeesCached(payload.query || (e.parameter && e.parameter.query) || '') };
         break;
       case 'getDashboardStats':
-        result = { success: true, data: getDashboardStats() };
+        result = { success: true, data: getDashboardStatsCached() };
         break;
       case 'addItem':
         result = addItem(payload);
@@ -98,85 +101,100 @@ function handleRequest(e) {
 
   const json = JSON.stringify(result);
 
-  // JSONP (GET dengan callback)
   if (callback) {
     const out = ContentService.createTextOutput(callback + '(' + json + ')');
     out.setMimeType(ContentService.MimeType.JAVASCRIPT);
     return out;
   }
 
-  // JSON biasa (POST atau GET tanpa callback)
   const out = ContentService.createTextOutput(json);
   out.setMimeType(ContentService.MimeType.JSON);
   return out;
 }
 
-// ============================================================
-// Update signature URL pada baris distribusi yang sudah ada
-// ============================================================
-function updateDistributionSignature(data) {
-  try {
-    if (!data.id || !data.signature) {
-      return { success: false, error: 'id dan signature wajib diisi' };
-    }
+// ======================= CACHE WRAPPER FUNCTIONS =======================
 
-    const sheet = getSheet('Distribution');
-    if (sheet.getLastRow() <= 1) return { success: false, error: 'Data distribusi kosong' };
-
-    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 14).getValues();
-    for (var i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) === String(data.id)) {
-        // Kolom ke-10 (index 9) = signature
-        sheet.getRange(i + 2, 10).setValue(data.signature);
-        Logger.log('Signature updated for distribution: ' + data.id);
-        return { success: true };
-      }
-    }
-
-    return { success: false, error: 'ID distribusi tidak ditemukan: ' + data.id };
-  } catch (err) {
-    Logger.log('updateDistributionSignature ERROR: ' + err.toString());
-    return { success: false, error: err.toString() };
+function getItemsCached() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('items');
+  if (cached) {
+    Logger.log('[Cache] getItems from cache');
+    return JSON.parse(cached);
   }
+  Logger.log('[Cache] getItems from sheet');
+  const items = getItems();
+  cache.put('items', JSON.stringify(items), CACHE_TTL.ITEMS);
+  return items;
 }
 
-// ============================================================
-// Upload tanda tangan ke Google Drive (tanpa setSharing)
-// ============================================================
-function uploadSignature(payload) {
-  try {
-    const imageBase64 = payload.imageBase64;
-    const fileName    = payload.fileName;
-
-    if (!imageBase64 || !fileName) {
-      return { success: false, error: 'imageBase64 dan fileName wajib diisi' };
-    }
-
-    Logger.log('uploadSignature: ' + fileName + ' (' + Math.round(imageBase64.length * 0.75 / 1024) + ' KB)');
-
-    const decoded = Utilities.base64Decode(imageBase64);
-    const blob    = Utilities.newBlob(decoded, 'image/png', fileName);
-    const folder  = DriveApp.getFolderById(SIGNATURE_FOLDER_ID);
-    const file    = folder.createFile(blob);
-
-    // Baris setSharing dihapus karena folder sudah publik (Anyone with link can view)
-    // file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-
-    const fileId  = file.getId();
-    const viewUrl = 'https://drive.google.com/file/d/' + fileId + '/view';
-
-    Logger.log('uploadSignature OK: ' + fileId);
-    return { success: true, url: viewUrl, fileId: fileId };
-
-  } catch (err) {
-    Logger.log('uploadSignature ERROR: ' + err.toString());
-    return { success: false, error: 'Upload gagal: ' + err.toString() };
+function getDashboardStatsCached() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('dashboard_stats');
+  if (cached) {
+    Logger.log('[Cache] dashboard_stats from cache');
+    return JSON.parse(cached);
   }
+  Logger.log('[Cache] dashboard_stats from sheet');
+  const stats = getDashboardStats();
+  cache.put('dashboard_stats', JSON.stringify(stats), CACHE_TTL.DASHBOARD);
+  return stats;
 }
 
-// ============================================================
-// Sheet helpers
-// ============================================================
+function getDistributionHistoryCached() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('distribution_history');
+  if (cached) {
+    Logger.log('[Cache] distribution_history from cache');
+    return JSON.parse(cached);
+  }
+  Logger.log('[Cache] distribution_history from sheet');
+  const history = getDistributionHistory();
+  cache.put('distribution_history', JSON.stringify(history), CACHE_TTL.HISTORY);
+  return history;
+}
+
+function getStockHistoryCached() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('stock_history');
+  if (cached) {
+    Logger.log('[Cache] stock_history from cache');
+    return JSON.parse(cached);
+  }
+  Logger.log('[Cache] stock_history from sheet');
+  const history = getStockHistory();
+  cache.put('stock_history', JSON.stringify(history), CACHE_TTL.HISTORY);
+  return history;
+}
+
+function searchEmployeesCached(query) {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'employees_' + (query || 'all');
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    Logger.log('[Cache] employees from cache: ' + cacheKey);
+    return JSON.parse(cached);
+  }
+  Logger.log('[Cache] employees from sheet: ' + cacheKey);
+  const employees = searchEmployees(query);
+  cache.put(cacheKey, JSON.stringify(employees), CACHE_TTL.EMPLOYEES);
+  return employees;
+}
+
+// ======================= INVALIDATE CACHE SAAT DATA BERUBAH =======================
+
+function invalidateCache() {
+  const cache = CacheService.getScriptCache();
+  cache.removeAll([
+    'items',
+    'dashboard_stats',
+    'distribution_history',
+    'stock_history'
+  ]);
+  Logger.log('[Cache] Core caches invalidated');
+}
+
+// ======================= ORIGINAL FUNCTIONS (READ SHEET) =======================
+
 function getSheet(sheetName) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   let sheet = ss.getSheetByName(sheetName);
@@ -233,6 +251,7 @@ function addItem(itemData) {
                   itemData.current_stock||0, itemData.unit||'pcs',
                   itemData.min_stock||50, new Date().toISOString()];
   sheet.appendRow(newRow);
+  invalidateCache(); // Hapus cache karena data berubah
   return { success:true, id:newRow[0] };
 }
 
@@ -248,6 +267,7 @@ function updateItem(itemData) {
       sheet.getRange(i+2,6).setValue(itemData.unit);
       sheet.getRange(i+2,7).setValue(itemData.min_stock);
       sheet.getRange(i+2,8).setValue(new Date().toISOString());
+      invalidateCache();
       return { success:true };
     }
   }
@@ -260,6 +280,7 @@ function deleteItem(itemId) {
   for (var i=0; i<data.length; i++) {
     if (String(data[i][0]) === String(itemId)) {
       sheet.deleteRow(i+2);
+      invalidateCache();
       return { success:true };
     }
   }
@@ -273,6 +294,7 @@ function saveStockOpname(data) {
                   data.notes||'', data.adjusted_by||'System', new Date().toISOString()];
   sheet.appendRow(newRow);
   updateItemStock(data.item_id, data.new_stock);
+  invalidateCache(); // Hapus cache karena stok berubah
   return { success:true, id:newRow[0] };
 }
 
@@ -291,13 +313,10 @@ function updateItemStock(itemId, newStock) {
 function saveDistribution(data) {
   try {
     const sheet = getSheet('Distribution');
-
-    // Bangun URL dari fileId jika ada (lebih pendek dari full URL)
     var signatureUrl = data.signature || '';
     if (data.signature_file_id) {
       signatureUrl = 'https://drive.google.com/file/d/' + data.signature_file_id + '/view';
     }
-
     var newRow = [
       Date.now().toString(),
       data.employee_id,
@@ -314,11 +333,8 @@ function saveDistribution(data) {
       new Date().toISOString(),
       'completed'
     ];
-
     sheet.appendRow(newRow);
     Logger.log('Distribution saved: ' + newRow[0]);
-
-    // Kurangi stok
     var itemSheet = getSheet('Items');
     var lastRow = itemSheet.getLastRow();
     if (lastRow > 1) {
@@ -328,14 +344,12 @@ function saveDistribution(data) {
           var newStock = Number(itemData[i][4]) - Number(data.quantity);
           itemSheet.getRange(i+2, 5).setValue(newStock);
           itemSheet.getRange(i+2, 8).setValue(new Date().toISOString());
-          Logger.log('Stock updated: ' + data.item_id + ' -> ' + newStock);
           break;
         }
       }
     }
-
+    invalidateCache(); // Hapus cache karena stok berubah
     return { success:true, id:newRow[0] };
-
   } catch(err) {
     Logger.log('saveDistribution ERROR: ' + err.toString());
     return { success:false, error:err.toString() };
@@ -399,7 +413,7 @@ function initializeEmployees() {
 }
 
 function getDashboardStats() {
-  const items = getItems();
+  const items = getItems(); // fungsi asli (baca sheet)
   const distribution = getDistributionHistory();
   const categories = [
     { id:1, name:'Obat',    count:0, low_stock:0 },
@@ -420,6 +434,51 @@ function getDashboardStats() {
   return { total_items:items.length, low_stock:lowStockCount,
            total_stock:totalStock, total_distributed:totalDistributed,
            categories:categories };
+}
+
+function updateDistributionSignature(data) {
+  try {
+    if (!data.id || !data.signature) {
+      return { success: false, error: 'id dan signature wajib diisi' };
+    }
+    const sheet = getSheet('Distribution');
+    if (sheet.getLastRow() <= 1) return { success: false, error: 'Data distribusi kosong' };
+    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 14).getValues();
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i][0]) === String(data.id)) {
+        sheet.getRange(i + 2, 10).setValue(data.signature);
+        Logger.log('Signature updated for distribution: ' + data.id);
+        invalidateCache(); // Hapus cache history
+        return { success: true };
+      }
+    }
+    return { success: false, error: 'ID distribusi tidak ditemukan: ' + data.id };
+  } catch (err) {
+    Logger.log('updateDistributionSignature ERROR: ' + err.toString());
+    return { success: false, error: err.toString() };
+  }
+}
+
+function uploadSignature(payload) {
+  try {
+    const imageBase64 = payload.imageBase64;
+    const fileName    = payload.fileName;
+    if (!imageBase64 || !fileName) {
+      return { success: false, error: 'imageBase64 dan fileName wajib diisi' };
+    }
+    Logger.log('uploadSignature: ' + fileName + ' (' + Math.round(imageBase64.length * 0.75 / 1024) + ' KB)');
+    const decoded = Utilities.base64Decode(imageBase64);
+    const blob    = Utilities.newBlob(decoded, 'image/png', fileName);
+    const folder  = DriveApp.getFolderById(SIGNATURE_FOLDER_ID);
+    const file    = folder.createFile(blob);
+    const fileId  = file.getId();
+    const viewUrl = 'https://drive.google.com/file/d/' + fileId + '/view';
+    Logger.log('uploadSignature OK: ' + fileId);
+    return { success: true, url: viewUrl, fileId: fileId };
+  } catch (err) {
+    Logger.log('uploadSignature ERROR: ' + err.toString());
+    return { success: false, error: 'Upload gagal: ' + err.toString() };
+  }
 }
 
 // Jalankan fungsi ini SEKALI dari editor untuk memberikan izin DriveApp
