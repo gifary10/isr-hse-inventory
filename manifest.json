@@ -1,0 +1,24 @@
+{
+  "name": "ISR Inventory",
+  "short_name": "ISR",
+  "description": "Manajemen Stok & Distribusi",
+  "start_url": "./",
+  "display": "standalone",
+  "theme_color": "#00102c",
+  "background_color": "#f0f4f8",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon.jpeg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon.jpeg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}
