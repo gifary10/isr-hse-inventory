@@ -3,10 +3,12 @@
   "short_name": "ISR",
   "description": "Manajemen Stok & Distribusi",
   "start_url": "./",
+  "scope": "/",
   "display": "standalone",
   "theme_color": "#00102c",
   "background_color": "#f0f4f8",
   "orientation": "portrait",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "icon.jpeg",

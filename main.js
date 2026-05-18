@@ -6,6 +6,29 @@ document.addEventListener('DOMContentLoaded', function() {
         hideLoading();
     }, 1000);
     
+    // ✅ REGISTRASI SERVICE WORKER (PENTING UNTUK INSTALL)
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js')
+            .then(registration => {
+                console.log('Service Worker registered with scope:', registration.scope);
+                
+                // Deteksi update
+                registration.addEventListener('updatefound', () => {
+                    const newWorker = registration.installing;
+                    newWorker.addEventListener('statechange', () => {
+                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                            if (confirm('Update tersedia. Muat ulang halaman untuk menggunakan versi terbaru?')) {
+                                window.location.reload();
+                            }
+                        }
+                    });
+                });
+            })
+            .catch(error => {
+                console.error('Service Worker registration failed:', error);
+            });
+    }
+    
     window.addEventListener('hashchange', function() {
         var hash = window.location.hash.slice(1);
         if (hash && router.routes && router.routes[hash]) {
