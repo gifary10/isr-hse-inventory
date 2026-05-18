@@ -3,7 +3,7 @@
   "short_name": "ISR",
   "description": "Manajemen Stok & Distribusi",
   "start_url": "./",
-  "scope": "/",
+  "scope": "./",
   "display": "standalone",
   "theme_color": "#00102c",
   "background_color": "#f0f4f8",
