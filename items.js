@@ -209,6 +209,7 @@ function openItemModal(item = null) {
                                         <option value="strip" ${isEdit && item.unit === 'strip' ? 'selected' : ''}>Strip</option>
                                         <option value="pasang" ${isEdit && item.unit === 'pasang' ? 'selected' : ''}>Pasang</option>
                                         <option value="box" ${isEdit && item.unit === 'box' ? 'selected' : ''}>Box</option>
+                                        <option value="box" ${isEdit && item.unit === 'sachet' ? 'selected' : ''}>Sachet</option>
                                     </select>
                                 </div>
                             </div>
